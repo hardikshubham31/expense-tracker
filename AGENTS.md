@@ -1,178 +1,181 @@
-<!-- BEGIN:nextjs-agent-rules -->
-
-## This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
-
 # Expense Tracker: guide for coding agents
 
 Personal and shared (household) expense tracking. Read this before changing code; the README covers
-features and setup for humans.
+features and setup for humans. Next.js-specific rules: `apps/web/AGENTS.md`.
+
+## Architecture
+
+An npm-workspaces monorepo with two servers:
+
+```
+apps/api        Express 5 backend. Owns authentication (hand-written), Prisma + Postgres,
+                all business rules and every data endpoint. Port 4000.
+apps/web        Next.js 16 frontend. Pages and UI only, NO database access. Port 3000.
+packages/shared Pure TypeScript used by both: money, dates, csv, splits, categories,
+                suggest, redirect. No I/O, no Node or browser APIs.
+tests/e2e       Playwright: browser specs + API security spec, against both servers.
+```
+
+Request flow:
+
+- **Browser → web → API.** The browser only ever talks to the web app. Its catch-all route
+  `apps/web/src/app/api/[...path]/route.ts` proxies `/api/*` to the API at runtime (reads
+  `API_URL` per request; a next.config rewrite would be fixed at build time). Cookies stay
+  first-party, no CORS.
+- **Server components / server actions → API.** `apps/web/src/lib/api.ts` calls the API with the
+  visitor's cookies forwarded. Server actions are thin proxies (FormData → JSON → API →
+  `refresh()`); the API does all validation and authorization.
+- One `.env` at the repo root, loaded by both apps (`apps/api/src/env.ts`, `apps/web/next.config.ts`).
 
 ## Stack
 
-- **Next.js 16** App Router with `cacheComponents` and `partialPrefetching` on (`next.config.ts`), Turbopack, React 19
-- **Better Auth 1.7** (email/password + optional Google) with the Prisma adapter, `src/lib/auth.ts`
-- **Prisma 7.10** + **PostgreSQL 17** (Docker), driver adapter `@prisma/adapter-pg`, client generated to `src/generated/prisma`
-- **Tailwind CSS 4**, **zod 4**, **Playwright** for end-to-end tests
-- Stay on **Prisma 7**: Better Auth's adapter doesn't support Prisma 8 yet
+- API: Express 5.3, Prisma 7.10 + `@prisma/adapter-pg`, PostgreSQL 17 (Docker), zod 4, pino,
+  helmet, express-rate-limit, multer, jose. Dev with `tsx watch`, built with `tsup` to `dist/`.
+- Web: Next.js 16 App Router with `cacheComponents` + `partialPrefetching`, React 19, Tailwind 4.
+- Tests: Playwright 1.56 using the installed Chrome.
 
-## Commands
+## Commands (from the repo root)
 
 ```bash
-docker compose up -d        # Postgres on 127.0.0.1:5432 (dbs: expense_tracker, expense_tracker_test)
-npm run dev                 # http://localhost:3000
-npm run build && npm start  # production build
-npx tsc --noEmit && npm run lint
-npm run db:migrate          # prisma migrate dev (creates + applies a migration)
-npm run build && npm run test:e2e   # Playwright against :3100 + expense_tracker_test
+docker compose up -d            # Postgres on 127.0.0.1:5432 (expense_tracker, expense_tracker_test)
+npm run dev                     # API :4000 + web :3000 together
+npm run build && npm start      # production builds of both
+npm run typecheck && npm run lint
+npm run db:migrate -- --name <change>   # prisma migrate dev (in apps/api)
+npm run build && npm run test:e2e       # API :4100 + web :3100 against expense_tracker_test
 ```
 
-Run `tsc`, `lint`, `build` and the e2e suite before calling a change done. The suite must pass
-repeatedly, not just once; fix flakiness at its cause.
+Before calling a change done: `typecheck`, `lint`, `build`, and the e2e suite (repeatedly; fix
+flakiness at its cause).
 
-## Layout
+## Authentication (apps/api/src/auth)
 
-```
-src/
-  proxy.ts                 Optimistic cookie check: redirects only, never the real auth check
-  app/(auth)/              login, signup, forgot/reset password (static pages + client forms)
-  app/dashboard/           Signed-in app. layout.tsx provides ledger data via LedgerProvider
-    actions/*.ts           Server actions ("use server"), one file per area
-    _components/           Dashboard-only client components (dialogs, charts, lists)
-    <page>/page.tsx        Server pages; dynamic parts sit inside <Suspense>
-  app/invite/[token]/      Accept a household invite
-  app/api/                 auth handler, CSV export, receipts upload/serve, account export
-  components/              Shared UI: dialog, menu, ui (buttons/cards), auth form pieces, theme
-  lib/                     Server and shared logic (see below)
-prisma/schema.prisma       Data model; migrations in prisma/migrations
-tests/e2e/                 Playwright specs + helpers (outbox reader, signUp, addExpense)
-```
+Hand-written, Node crypto only. Keep these properties:
+
+- **Passwords**: scrypt (N=2^15, r=8, p=1, 16-byte salt), stored `scrypt$N$r$p$salt$hash` on the
+  `credential` Account; compared with `timingSafeEqual`. Unknown emails still run a dummy hash
+  (`dummyPasswordCheck`) so timing doesn't reveal accounts.
+- **Sessions**: random 32-byte token in an httpOnly, SameSite=Lax cookie named `session`
+  (Secure in production). The DB stores only `sha256(token)` (`Session.tokenHash`). 30 days
+  with "remember me" (sliding), otherwise a browser-session cookie and a 1-day row.
+- **Reset tokens**: in `Verification` as `reset-password:<sha256>`, 1 hour, single use, newest
+  only; a reset deletes every session of that user.
+- **Google**: OIDC code flow with PKCE and an HMAC-signed state cookie (`AUTH_SECRET`); the ID
+  token is verified with jose against Google's JWKS (issuer, audience, `email_verified`). Redirect
+  URI is `<APP_URL>/api/auth/callback/google` (through the web proxy).
+- **No email verification.** Because of that, linking Google to an existing *unverified* account
+  deletes that account's password (someone else may have squatted the address). Don't remove this.
+- Rate limit (10/min/IP) on signup, login, forgot/reset/change password and account deletion.
+  `trust proxy` is `loopback` (the web proxy is the one trusted hop). `AUTH_RATE_LIMIT=off` only in tests.
+- Deleting a password-less account requires a session less than 24 hours old.
 
 ## Core model: ledgers
 
 All money data belongs to a **ledger**, never directly to a user.
 
-- Every user has a `PERSONAL` ledger (created in Better Auth's `databaseHooks.user.create.after`).
-  `SHARED` ledgers are households with several members.
-- `LedgerMember` rows are **never deleted** while the ledger exists. Leaving sets `leftAt`;
-  deleting a user nulls `userId`. Expenses, splits and settlements point at **member ids**, and
-  `member.name` is a display snapshot.
-- Leaving a household or deleting an account is **blocked while the member's balance is non-zero**
-  (`leaveSharedLedger`, `prepareAccountDeletion` in `src/lib/ledgers.ts`).
-- The active ledger is the `ledger` cookie, validated against an active membership.
+- Every user has a `PERSONAL` ledger (created at sign-up and on first Google sign-in; self-healed
+  in `buildContext`). `SHARED` ledgers are households.
+- `LedgerMember` rows are **never deleted** while the ledger exists: leaving sets `leftAt`, deleting
+  a user nulls `userId`. Expenses, splits and settlements reference **member ids**; `member.name` is
+  a display snapshot.
+- Leaving or deleting an account is **blocked while the member's balance is non-zero**
+  (`leaveSharedLedger`, `prepareAccountDeletion` in `apps/api/src/services/ledgers.ts`).
+- The active ledger is the `ledger` cookie, set by the web app; the API validates it against an
+  active membership on every request and falls back to the personal ledger.
 
-## Rules that keep the app correct
+## API rules (apps/api)
 
-### Authorization (do not bypass)
+- Routes use `requireAuth` or `requireLedger` (`src/middleware/context.ts`); read the context with
+  `getAuth(req)` / `getCtx(req)`. Readers in `src/services/data.ts` take the context; never accept a
+  ledger/user id from the client.
+- Every write is scoped: `where: { id, ledgerId: ctx.ledger.id }` (`updateMany`/`deleteMany`/
+  `findFirst`), and referenced ids (category, payer, split members) are checked to belong to the
+  same ledger. Owner-only operations check `ctx.isOwner`.
+- Responses: data on success, `{ ok: true, id? }` for mutations; errors via `HttpError`
+  (`src/http.ts`): `invalid(fieldErrors)` → 400 `{ ok:false, fieldErrors }`, others
+  `{ ok:false, error }`. Validate with zod and report **every** field's error at once.
+- Express 5 forwards rejected promises to the error handler: just `throw`.
+- Slow side effects (budget alerts, file deletion) go through `defer()` (`src/logger.ts`).
+- Read env only through `src/env.ts` (zod-validated). The API port is `API_PORT`, not `PORT`
+  (the web app shares the `.env` and `next start` reads `PORT`).
+- Imports inside the API use `.js` suffixes (ESM).
 
-- **Every** server read goes through `requireLedger()` / `requireUser()` (`src/lib/session.ts`,
-  `React.cache`-deduped). Readers in `src/lib/data.ts` resolve the ledger themselves; never add a
-  reader that takes a `ledgerId`/`userId` argument from the caller.
-- **Every** server action re-authenticates and scopes writes with `where: { id, ledgerId: ctx.ledger.id }`
-  (`updateMany`/`deleteMany`/`findFirst`), and checks that referenced ids (category, payer, split
-  members) belong to the same ledger.
-- Owner-only operations check `ctx.isOwner`. Route handlers check the session and return 401
-  instead of redirecting.
-- `src/proxy.ts` is only an optimistic redirect. Never rely on it for security.
+## Money and dates (packages/shared)
 
-### Money and dates
+- Amounts are **integer hundredths** of the ledger currency (`money.ts`): parse with
+  `parseAmount` (string-based), format with `formatMoney`. **Sum in JS**: Prisma `Int`
+  aggregates are 32-bit.
+- Splits use `equalSplit`; custom splits must add up exactly.
+- Expense/income dates are Postgres `DATE` (UTC midnight). Use the UTC helpers in `dates.ts`.
+  "Today" is `ctx.today` (user's time zone); in the browser `todayInput()`. Store time zones via
+  `normalizeTimeZone`.
+- JSON has no Date: `apps/web/src/lib/api.ts` revives known date keys. Add new date fields to
+  `DATE_KEYS` there.
 
-- Amounts are **integer hundredths** of the ledger currency, for every currency (`src/lib/money.ts`).
-  Parse user input with `parseAmount` (string-based, no float math); format with `formatMoney`.
-  Only currencies with at most 2 minor digits are offered.
-- **Sum in JavaScript**, not Prisma `_sum`: Prisma `Int` aggregates are 32-bit.
-- Splits use `equalSplit` (leftover hundredths go to the first members); custom splits must add up
-  exactly to the total.
-- Expense/income dates are Postgres `DATE`, read back as UTC midnight. Use the UTC helpers in
-  `src/lib/dates.ts`. "Today" is `ctx.today` (the user's time zone via `todayIn`); in the browser
-  use `todayInput()`. Store time zones through `normalizeTimeZone` (modern IANA names).
+## Web rules (apps/web)
 
-### Next.js 16 with Cache Components
+- No database or secrets beyond `API_URL`/Google client id presence. Data comes from
+  `@/lib/data` and `@/lib/session` (`requireLedger()`, cached per request; 401 → `/login`).
+- Next.js 16 with Cache Components: request-dependent rendering sits inside `<Suspense>`; don't
+  call `new Date()` before awaiting request data; `useSearchParams()` needs its own `<Suspense>`
+  (or read `window.location.search` in handlers). No functions passed from server to client
+  components. `"use server"` files export only async functions.
+- Auth forms call the API from the browser via `@/lib/auth-api` (`/api/auth/*`). Google sign-in is
+  a full navigation to `/api/auth/google`.
+- `src/proxy.ts` only checks that a `session` cookie exists, for redirects. Never security.
 
-- Anything that reads cookies/headers/`searchParams` (which is all signed-in data) must render
-  inside `<Suspense>`. Pages follow the pattern: a sync `export default` that renders
-  `<Suspense fallback={…}><Inner searchParams={searchParams} /></Suspense>`.
-- Don't call `new Date()` in a server component before awaiting request data (`requireLedger()` or
-  `searchParams`). Prefer `ctx.today`.
-- `useSearchParams()` in a client component needs its own `<Suspense>`. For values only needed on
-  submit, read `window.location.search` in the handler instead (keeps the page static).
-- After mutations, call `refresh()` from `next/cache` in the action. Run slow side effects
-  (budget alerts, file deletion) with `after()` from `next/server`.
-- Server components can't pass functions to client components (no render props across the boundary).
-- A `"use server"` file may only export async functions: put constants and helpers in `src/lib/`
-  (e.g. `MAX_IMPORT_ROWS` lives in `src/lib/csv.ts`). Types are fine.
-- Route types are generated: use the global `PageProps<"/route">`, `LayoutProps<"/route">` and
-  `RouteContext<"/api/…">` helpers (run `npx next typegen` if `tsc` can't find them).
-- Runtime file paths (receipts) use `/*turbopackIgnore: true*/` so Turbopack doesn't trace the project.
+## Database and Prisma (apps/api/prisma)
 
-### Database and Prisma
+- Edit `schema.prisma`, then `npm run db:migrate -- --name <change>`; use `--create-only` when a
+  migration needs data changes or a rename (non-interactive shells can't answer Prisma's prompt).
+- `prisma generate` runs on install and build; client output `apps/api/src/generated/prisma`
+  (never edit).
+- **Never run `prisma migrate reset`** or other destructive commands; Prisma blocks them for AI
+  agents and they need the user's explicit consent. Tests use `migrate deploy`.
 
-- Change `prisma/schema.prisma`, then `npm run db:migrate -- --name <change>`. Migrations that
-  need data changes can be created with `--create-only` and edited before applying.
-- Prisma 7 doesn't generate on migrate: run `npx prisma generate` (also runs on `npm install`).
-- **Never run `prisma migrate reset`** or other destructive commands yourself; Prisma blocks them
-  for AI agents, and they need the user's explicit consent. The test setup uses `migrate deploy`.
-- Don't edit `src/generated/`.
-- Better Auth core models (`User`, `Session`, `Account`, `Verification`) follow its schema; extra
-  user fields must also be declared in `user.additionalFields` in `src/lib/auth.ts`.
+## Features with invariants
 
-### Features with invariants
+- **Recurring** (`services/recurring.ts`): materialized up to today on read via `syncRecurring`;
+  `(recurringId, date)` is unique, so it's idempotent (catch `P2002`, `skipDuplicates`).
+- **Budget alerts** (`services/budget-alerts.ts`): one `BudgetAlert` row per
+  ledger/scope/month/threshold = "already sent". Trigger after any change to a month's spending.
+- **Receipts** (`services/receipts.ts`, `routes/receipts.ts`): type from magic bytes, stored outside
+  any public folder, served only to ledger members with `nosniff` + sandboxing CSP; delete files
+  with their expense/ledger (`deleteLedgerAndFiles`).
+- **CSV**: export quotes every cell and prefixes `= + - @` with `'`; import previews and checks
+  duplicates (`date|amount|description`) before inserting.
+- **Redirect targets** from the URL go through `safeRedirect`.
+- **Email**: no provider. `sendEmail` logs to the console and writes `.outbox/*.json` atomically in
+  dev/tests. Invites are shared by copying the link. Email never throws into a request.
 
-- **Recurring rules** (`src/lib/recurring.ts`) are materialized on page load up to today by
-  `syncRecurring()` in `data.ts`. The unique `(recurringId, date)` index makes this idempotent;
-  keep it that way (catch `P2002`, use `skipDuplicates`).
-- **Budget alerts** (`src/lib/budget-alerts.ts`): one `BudgetAlert` row per
-  ledger/scope/month/threshold is the "already sent" marker. Trigger `checkBudgetAlerts` via
-  `after()` whenever spending in a month changes.
-- **Receipts** (`src/lib/receipts.ts`): type comes from magic bytes, never the browser; stored
-  outside `public/` and served only to ledger members with `nosniff` and a sandboxing CSP.
-  Deleting an expense or ledger must also delete its files (`deleteLedgerAndFiles`).
-- **CSV export** quotes every cell and prefixes `= + - @` with `'` (formula injection).
-  **CSV import** previews and checks duplicates (`date|amount|description`) before inserting.
-- **Redirect targets** from the URL go through `safeRedirect` (`src/lib/redirect.ts`).
-- **Email**: no provider. `sendEmail` (`src/lib/email.ts`) prints to the console and, in dev/tests,
-  writes `.outbox/*.json` atomically. Sign-up has no email verification. Invites are shared by
-  copying the link. Email must never throw into the request that triggered it.
+## UI conventions (apps/web)
 
-## UI conventions
-
-- Forms are client components using `onSubmit` + `useTransition` calling a server action that
-  returns `ActionResult` (`src/lib/action-utils.ts`). Validate with zod and **report every field's
-  error at once**; focus the first `[aria-invalid=true]`. Use `Field`, `TextInput`, `AmountInput`,
+- Forms: client components with `onSubmit` + `useTransition`, calling a server action that returns
+  `ActionResult`; focus the first `[aria-invalid=true]`. Use `Field`, `TextInput`, `AmountInput`,
   `PasswordInput`, `FormAlert`, `buttonStyles`, `selectClass`/`selectBase`.
-- Modals use `src/components/dialog.tsx` (native `<dialog>`). It closes Escape through `cancel`
-  synchronously and ignores its own async `close` events. Don't regress that, or quick reopen breaks.
-- Dashboard client components read ledger data from `useLedgerUI()`; open the add-expense dialog
-  with `openAddExpense()` (the **N** shortcut lives in `ledger-context.tsx`).
-- Lists that open an edit dialog track the **id** being edited and look the row up from fresh props.
-- Colors: zinc neutrals, emerald accent. Category colors are **palette slots** (`COLOR_SLOTS`,
-  CSS vars `--series-*` in `globals.css`), validated for color blindness in light and dark; assign
-  in order, never generate new hues. Status colors (`--status-*`, `text-good`, `text-critical`)
-  are reserved for state and always paired with an icon + text.
-- Charts are hand-built HTML/SVG: one axis only, thin marks, legend when there are 2+ series,
-  hover **and** keyboard tooltips, and a "View as table" fallback.
-- Dark mode: `data-theme` on `<html>` set before paint by the inline script in
-  `src/components/theme.tsx`; Tailwind's `dark:` variant targets `[data-theme="dark"]`.
-- Accessibility basics: labelled inputs, `aria-describedby` for hints/errors, `role="alert"` for
-  errors, visible `focus-visible` outlines, no horizontal scroll at 390px wide.
+- Modals use `components/dialog.tsx` (native `<dialog>`; Escape via synchronous `cancel`; ignores
+  its own async `close` events). Don't regress that.
+- Dashboard client components read ledger data via `useLedgerUI()`; **N** opens add-expense.
+- Lists that open an edit dialog track the **id** and look the row up from fresh props.
+- Category colors are palette slots (`COLOR_SLOTS`, `--series-*`), validated for color blindness;
+  status colors are reserved and paired with icon + text. Charts: one axis, legend for 2+ series,
+  hover **and** keyboard tooltips, a table view. Dark mode via `data-theme` set before paint.
+- Accessibility: labelled inputs, `aria-describedby`, `role="alert"` for errors, visible focus,
+  no horizontal scroll at 390px.
 
-## Tests
+## Tests (tests/e2e)
 
-- Specs in `tests/e2e/` create their own users with unique emails (`uniqueEmail`), so they run in
-  parallel against a shared test database. Read emails with `waitForEmail` / `linkIn`.
-- The browser runs in UTC (`timezoneId`); use the UTC date helpers in `tests/e2e/helpers.ts`.
-- Wait for hydration (`waitForLoadState("networkidle")`) before keyboard shortcuts or file inputs.
-- Add or update a spec with every user-facing change.
+- Each test creates its own users (`uniqueEmail`), so specs run in parallel on a shared test DB.
+  Emails are read from `test-results/outbox` (`waitForEmail`, `linkIn`).
+- `api-security.spec.ts` hits the API directly: cross-user access, forged ledger cookie, logout
+  revocation, reset semantics, OAuth state. Extend it with every new endpoint.
+- The browser runs in UTC; use the UTC helpers. Wait for `networkidle` before keyboard shortcuts
+  or file inputs.
 
 ## Secrets and git
 
-- `.env` holds real secrets and is git-ignored; keep `.env.example` in sync with placeholder values.
-- Not committed: `.env`, `.claude/`, `.outbox/`, `storage/`, `test-results/`, `playwright-report/`,
-  `src/generated/`, `node_modules/`.
-- Commit as the repo's configured user (`git config user.email`). Never put tokens in remotes,
-  config files or commands that get saved.
+- `.env` (root) holds real secrets and is git-ignored; keep `.env.example` in sync.
+- Not committed: `.env`, `.claude/`, `.outbox/`, `storage/`, `dist/`, `.next/`, `test-results/`,
+  `playwright-report/`, `src/generated/`, `node_modules/`.
+- Commit as the repo's configured user. Push over SSH (`github-hardikshubham31` host alias).
+  Never put tokens in remotes, config files or saved commands.

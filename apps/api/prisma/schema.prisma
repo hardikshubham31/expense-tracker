@@ -1,0 +1,330 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth (hand-written in apps/api/src/auth) ──────────────────────────────
+
+model User {
+  id            String         @id
+  name          String
+  email         String
+  emailVerified Boolean        @default(false)
+  image         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  /// IANA time zone, e.g. "Asia/Kolkata". Null until detected from the browser.
+  timezone      String?
+  /// Email me when a budget reaches 80% / 100%
+  budgetAlerts  Boolean        @default(true)
+  memberships   LedgerMember[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+/// tokenHash is the SHA-256 of the session cookie; the raw token is never stored.
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  tokenHash String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenHash])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+/// One-time tokens; `identifier` is "reset-password:<sha256 of token>", `value` the user id.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ─── Ledgers ────────────────────────────────────────────────────────────────
+// All money data belongs to a ledger: each user's personal ledger, or a shared
+// household ledger. Amounts are Int hundredths of the ledger currency.
+
+enum LedgerKind {
+  PERSONAL
+  SHARED
+}
+
+enum MemberRole {
+  OWNER
+  MEMBER
+}
+
+model Ledger {
+  id            String          @id @default(cuid())
+  name          String
+  kind          LedgerKind
+  currency      String          @default("INR")
+  /// Overall monthly budget, hundredths
+  monthlyBudget Int?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  members       LedgerMember[]
+  invites       LedgerInvite[]
+  categories    Category[]
+  expenses      Expense[]
+  incomes       Income[]
+  recurring     RecurringRule[]
+  settlements   Settlement[]
+  budgetAlerts  BudgetAlert[]
+  receipts      Receipt[]
+
+  @@map("ledger")
+}
+
+/// Membership rows are never deleted while the ledger exists: leaving sets
+/// `leftAt`, and deleting the user nulls `userId`. Expenses and balances keep
+/// pointing at the member, whose `name` is a snapshot for display.
+model LedgerMember {
+  id        String     @id @default(cuid())
+  ledgerId  String
+  ledger    Ledger     @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name      String
+  role      MemberRole @default(MEMBER)
+  joinedAt  DateTime   @default(now())
+  leftAt    DateTime?
+
+  paid            Expense[]       @relation("ExpensePaidBy")
+  created         Expense[]       @relation("ExpenseCreatedBy")
+  splits          ExpenseSplit[]
+  settlementsFrom Settlement[]    @relation("SettlementFrom")
+  settlementsTo   Settlement[]    @relation("SettlementTo")
+  recurringPaid   RecurringRule[]
+  invitesSent     LedgerInvite[]
+
+  @@unique([ledgerId, userId])
+  @@index([userId])
+  @@map("ledger_member")
+}
+
+model LedgerInvite {
+  id          String       @id @default(cuid())
+  ledgerId    String
+  ledger      Ledger       @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  email       String
+  token       String       @unique
+  invitedById String
+  invitedBy   LedgerMember @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime     @default(now())
+
+  @@index([ledgerId])
+  @@map("ledger_invite")
+}
+
+model Category {
+  id            String          @id @default(cuid())
+  ledgerId      String
+  ledger        Ledger          @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  name          String
+  /// Palette slot key, e.g. "blue" (see src/lib/categories.ts)
+  color         String
+  /// Monthly budget, hundredths
+  budget        Int?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  expenses      Expense[]
+  recurring     RecurringRule[]
+
+  @@unique([ledgerId, name])
+  @@map("category")
+}
+
+// ─── Money in and out ───────────────────────────────────────────────────────
+
+model Expense {
+  id           String         @id @default(cuid())
+  ledgerId     String
+  ledger       Ledger         @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  categoryId   String?
+  category     Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  amount       Int
+  description  String
+  notes        String?
+  date         DateTime       @db.Date
+  paidById     String
+  paidBy       LedgerMember   @relation("ExpensePaidBy", fields: [paidById], references: [id], onDelete: NoAction)
+  createdById  String?
+  createdBy    LedgerMember?  @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: NoAction)
+  /// Set when generated from a recurring rule; (recurringId, date) makes generation idempotent
+  recurringId  String?
+  recurring    RecurringRule? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  splits       ExpenseSplit[]
+  receipt      Receipt?
+
+  @@unique([recurringId, date])
+  @@index([ledgerId, date])
+  @@index([categoryId])
+  @@map("expense")
+}
+
+/// How a shared expense is divided. Personal-ledger expenses have no splits.
+model ExpenseSplit {
+  id        String       @id @default(cuid())
+  expenseId String
+  expense   Expense      @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    LedgerMember @relation(fields: [memberId], references: [id], onDelete: NoAction)
+  amount    Int
+
+  @@unique([expenseId, memberId])
+  @@map("expense_split")
+}
+
+/// "A paid B back" in a shared ledger
+model Settlement {
+  id           String       @id @default(cuid())
+  ledgerId     String
+  ledger       Ledger       @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  fromMemberId String
+  from         LedgerMember @relation("SettlementFrom", fields: [fromMemberId], references: [id], onDelete: NoAction)
+  toMemberId   String
+  to           LedgerMember @relation("SettlementTo", fields: [toMemberId], references: [id], onDelete: NoAction)
+  amount       Int
+  date         DateTime     @db.Date
+  note         String?
+  createdAt    DateTime     @default(now())
+
+  @@index([ledgerId])
+  @@map("settlement")
+}
+
+model Income {
+  id          String         @id @default(cuid())
+  ledgerId    String
+  ledger      Ledger         @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  amount      Int
+  source      String
+  notes       String?
+  date        DateTime       @db.Date
+  recurringId String?
+  recurring   RecurringRule? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([recurringId, date])
+  @@index([ledgerId, date])
+  @@map("income")
+}
+
+enum EntryType {
+  EXPENSE
+  INCOME
+}
+
+enum Frequency {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+/// Rent, subscriptions, salary... Occurrences are materialized up to "today"
+/// whenever the ledger is viewed (src/lib/recurring.ts).
+model RecurringRule {
+  id          String        @id @default(cuid())
+  ledgerId    String
+  ledger      Ledger        @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  type        EntryType
+  amount      Int
+  description String
+  categoryId  String?
+  category    Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  /// Shared ledgers: who pays each occurrence (split equally among active members)
+  paidById    String?
+  paidBy      LedgerMember? @relation(fields: [paidById], references: [id], onDelete: NoAction)
+  frequency   Frequency
+  startDate   DateTime      @db.Date
+  endDate     DateTime?     @db.Date
+  /// Next occurrence not yet materialized
+  nextDate    DateTime      @db.Date
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  expenses    Expense[]
+  incomes     Income[]
+
+  @@index([ledgerId, active, nextDate])
+  @@map("recurring_rule")
+}
+
+model Receipt {
+  id           String   @id @default(cuid())
+  expenseId    String   @unique
+  expense      Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  ledgerId     String
+  ledger       Ledger   @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  storageKey   String
+  mimeType     String
+  size         Int
+  originalName String
+  createdAt    DateTime @default(now())
+
+  @@map("receipt")
+}
+
+/// One row per budget threshold crossed per month, so each alert emails once
+model BudgetAlert {
+  id        String   @id @default(cuid())
+  ledgerId  String
+  ledger    Ledger   @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  /// "overall" or a category id
+  scope     String
+  /// "YYYY-MM"
+  month     String
+  /// 80 or 100
+  threshold Int
+  createdAt DateTime @default(now())
+
+  @@unique([ledgerId, scope, month, threshold])
+  @@map("budget_alert")
+}
