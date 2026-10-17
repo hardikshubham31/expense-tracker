@@ -81,7 +81,7 @@ export async function leaveSharedLedger(memberId: string) {
   ]);
 }
 
-/** Runs before Better Auth deletes a user: leave shared ledgers, drop personal ones. */
+/** Runs before an account is deleted: leave shared ledgers, drop personal ones. */
 export async function prepareAccountDeletion(userId: string) {
   const memberships = await prisma.ledgerMember.findMany({
     where: { userId, leftAt: null },

@@ -8,7 +8,7 @@ import type { ActionResult } from "@/lib/action-utils";
 import { deleteLedger, inviteMember, leaveLedger, removeMember, revokeInvite } from "../actions/ledger";
 
 type Member = { id: string; name: string; role: "OWNER" | "MEMBER"; leftAt: Date | null };
-type Invite = { id: string; email: string; expiresAt: Date; token: string };
+type Invite = { id: string; email: string; expiresAt: Date; url: string };
 
 export function MemberList({ members, meId, isOwner }: { members: Member[]; meId: string; isOwner: boolean }) {
   const [pending, startTransition] = useTransition();
@@ -72,7 +72,7 @@ export function MemberList({ members, meId, isOwner }: { members: Member[]; meId
   );
 }
 
-export function InviteForm({ invites, baseUrl }: { invites: Invite[]; baseUrl: string }) {
+export function InviteForm({ invites }: { invites: Invite[] }) {
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -90,7 +90,7 @@ export function InviteForm({ invites, baseUrl }: { invites: Invite[]; baseUrl: s
   }
 
   async function copy(invite: Invite) {
-    await navigator.clipboard.writeText(`${baseUrl}/invite/${invite.token}`);
+    await navigator.clipboard.writeText(invite.url);
     setCopied(invite.id);
     setTimeout(() => setCopied(null), 2000);
   }

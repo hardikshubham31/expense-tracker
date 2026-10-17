@@ -5,6 +5,7 @@ import { computeBalances, suggestTransfers } from "@expense/shared/splits";
 import { prisma } from "../db.js";
 import { defer } from "../logger.js";
 import type { LedgerContext } from "../middleware/context.js";
+import { env } from "../env.js";
 import { materializeRecurring } from "./recurring.js";
 import { checkBudgetAlerts } from "./budget-alerts.js";
 
@@ -259,5 +260,5 @@ export async function getLedgerDetails(ctx: LedgerContext) {
         orderBy: { createdAt: "desc" },
       })
     : [];
-  return { ledger, members: allMembers, invites };
+  return { ledger, members: allMembers, invites: invites.map((invite) => ({ ...invite, url: `${env.APP_URL}/invite/${invite.token}` })) };
 }

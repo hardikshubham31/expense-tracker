@@ -44,7 +44,7 @@ async function Settings() {
             <MemberList members={details.members} meId={ctx.member.id} isOwner={ctx.isOwner} />
             {ctx.isOwner ? (
               <div className="mt-6 border-t border-zinc-100 pt-5 dark:border-zinc-800">
-                <InviteForm invites={details.invites} baseUrl={process.env.BETTER_AUTH_URL ?? "http://localhost:3000"} />
+                <InviteForm invites={details.invites} />
               </div>
             ) : null}
           </Card>

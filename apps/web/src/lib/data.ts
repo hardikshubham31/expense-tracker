@@ -98,7 +98,7 @@ export const getLedgerDetails = () =>
   apiGet<{
     ledger: { id: string; name: string; kind: "PERSONAL" | "SHARED"; currency: string; monthlyBudget: number | null };
     members: { id: string; name: string; userId: string | null; role: "OWNER" | "MEMBER"; leftAt: Date | null }[];
-    invites: { id: string; email: string; expiresAt: Date; token: string }[];
+    invites: { id: string; email: string; expiresAt: Date; token: string; url: string }[];
   }>("/api/ledger");
 
 export const getAccount = () =>
