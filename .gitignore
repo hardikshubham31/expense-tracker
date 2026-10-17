@@ -14,11 +14,12 @@
 /coverage
 
 # next.js
-/.next/
-/out/
+.next/
+out/
 
 # production
 /build
+dist/
 
 # misc
 .DS_Store
@@ -42,11 +43,11 @@ yarn-error.log*
 next-env.d.ts
 
 # prisma client
-/src/generated
+**/src/generated/
 
 # dev email outbox and uploaded receipts
-/.outbox
-/storage
+.outbox/
+storage/
 /test-results
 /playwright-report
 
