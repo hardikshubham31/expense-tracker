@@ -48,16 +48,6 @@ export function FormAlert({
   );
 }
 
-export function Divider({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-      <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-      {label}
-      <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-    </div>
-  );
-}
-
 export function AuthHeader({ title, description }: { title: string; description: ReactNode }) {
   return (
     <div className="space-y-2">

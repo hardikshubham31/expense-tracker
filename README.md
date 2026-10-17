@@ -57,17 +57,20 @@ Written by hand in `apps/api/src/auth` using Node's built-in crypto (no auth lib
 - **Sessions** are random 256-bit tokens in an httpOnly cookie; the database stores only a
   SHA-256 hash of each token. Logging out deletes the session server-side.
 - **Password reset** links are single-use, expire after an hour, and sign you out everywhere.
-- **Google sign-in** uses the OpenID Connect code flow with PKCE and a signed state cookie; the
-  ID token is verified against Google's published keys.
+- **Google sign-in** (backend only, not shown in the UI) uses the OpenID Connect code flow with
+  PKCE and a signed state cookie; the ID token is verified against Google's published keys.
 - **Rate limiting** on sign-up, login and password endpoints (10 per minute per IP).
 
 Sign-up doesn't verify email addresses (there's no email provider yet).
 
-### Google sign-in
+### Google sign-in (turned off)
 
-1. Create an OAuth client at <https://console.cloud.google.com/apis/credentials>.
-2. Authorized redirect URI: `http://localhost:3000/api/auth/callback/google`.
-3. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`, then restart.
+The login and sign-up pages offer email and password only. The backend still contains a complete
+Google sign-in flow (`apps/api/src/auth/google.ts`, `GET /api/auth/google`), so it can come back
+by adding a button that navigates to `/api/auth/google`, with `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`
+set and `http://localhost:3000/api/auth/callback/google` registered in Google Cloud.
+
+Accounts created with Google have no password: set one with **Forgot password**.
 
 ## Email
 
@@ -118,5 +121,4 @@ OAuth state).
 - Point `DATABASE_URL` at Postgres and run `npx prisma migrate deploy` in `apps/api`.
 - Set `APP_URL` to the public web URL and `AUTH_SECRET` to a long random value; serve over HTTPS
   (cookies become `Secure` when `NODE_ENV=production`).
-- Add `https://<domain>/api/auth/callback/google` to the Google client.
 - Give receipts persistent storage (`RECEIPTS_DIR`), and add an email provider (see Email).

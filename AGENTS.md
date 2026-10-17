@@ -60,7 +60,8 @@ Hand-written, Node crypto only. Keep these properties:
   with "remember me" (sliding), otherwise a browser-session cookie and a 1-day row.
 - **Reset tokens**: in `Verification` as `reset-password:<sha256>`, 1 hour, single use, newest
   only; a reset deletes every session of that user.
-- **Google**: OIDC code flow with PKCE and an HMAC-signed state cookie (`AUTH_SECRET`); the ID
+- **Google** (not offered in the UI: login/sign-up are email + password only; the flow is kept
+  for later): OIDC code flow with PKCE and an HMAC-signed state cookie (`AUTH_SECRET`); the ID
   token is verified with jose against Google's JWKS (issuer, audience, `email_verified`). Redirect
   URI is `<APP_URL>/api/auth/callback/google` (through the web proxy).
 - **No email verification.** Because of that, linking Google to an existing *unverified* account
@@ -114,14 +115,14 @@ All money data belongs to a **ledger**, never directly to a user.
 
 ## Web rules (apps/web)
 
-- No database or secrets beyond `API_URL`/Google client id presence. Data comes from
+- No database access and no secrets (only `API_URL`). Data comes from
   `@/lib/data` and `@/lib/session` (`requireLedger()`, cached per request; 401 → `/login`).
 - Next.js 16 with Cache Components: request-dependent rendering sits inside `<Suspense>`; don't
   call `new Date()` before awaiting request data; `useSearchParams()` needs its own `<Suspense>`
   (or read `window.location.search` in handlers). No functions passed from server to client
   components. `"use server"` files export only async functions.
-- Auth forms call the API from the browser via `@/lib/auth-api` (`/api/auth/*`). Google sign-in is
-  a full navigation to `/api/auth/google`.
+- Auth forms call the API from the browser via `@/lib/auth-api` (`/api/auth/*`). There is no
+  Google button; if one is added back, it must be a full navigation to `/api/auth/google`.
 - `src/proxy.ts` only checks that a `session` cookie exists, for redirects. Never security.
 
 ## Database and Prisma (apps/api/prisma)
