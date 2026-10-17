@@ -32,7 +32,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <ThemeScript />
       </head>
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      {/* Browser extensions (e.g. Grammarly) add attributes to <body> before React loads.
+          This ignores attribute differences on this element only; children are still checked. */}
+      <body className="min-h-full flex flex-col font-sans" suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }
