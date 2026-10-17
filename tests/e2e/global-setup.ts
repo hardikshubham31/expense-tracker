@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { TEST_ENV } from "../../playwright.config";
 
 /**
@@ -13,6 +14,7 @@ export default function globalSetup() {
     throw new Error(`Refusing to use a database whose URL doesn't mention "test": ${TEST_ENV.DATABASE_URL}`);
   }
   execSync("npx prisma migrate deploy", {
+    cwd: path.join(__dirname, "../../apps/api"),
     stdio: "inherit",
     env: { ...process.env, DATABASE_URL: TEST_ENV.DATABASE_URL },
   });

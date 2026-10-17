@@ -1,0 +1,41 @@
+{
+  "name": "@expense/api",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Express backend: authentication and all data APIs.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "build": "prisma generate && tsup",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@expense/shared": "*",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "cookie-parser": "1.4.7",
+    "dotenv": "^18.0.8",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.1",
+    "helmet": "8.3.0",
+    "jose": "6.2.12",
+    "multer": "2.4.0",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "pino-http": "11.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/pg": "^8.23.1",
+    "prisma": "7.10.1",
+    "tsup": "9.0.0",
+    "tsx": "4.23.15"
+  }
+}
