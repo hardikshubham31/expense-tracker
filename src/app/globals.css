@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Theme is set on <html data-theme> by an inline script before first paint
+   (see src/components/theme.tsx): stored choice, or the OS preference. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #18181b;
+
+  /* Categorical palette (validated order; light steps on #ffffff) */
+  --series-blue: #2a78d6;
+  --series-orange: #eb6834;
+  --series-aqua: #1baf7a;
+  --series-yellow: #eda100;
+  --series-magenta: #e87ba4;
+  --series-green: #008300;
+  --series-violet: #6250d6;
+  --series-red: #e34948;
+  --series-none: #898781;
+
+  /* Status (reserved; always paired with an icon + label) */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+  --text-good: #006300;
+  --text-critical: #b42727;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #09090b;
+  --foreground: #fafafa;
+
+  /* Dark steps, validated on #18181b */
+  --series-blue: #3987e5;
+  --series-orange: #d95926;
+  --series-aqua: #199e70;
+  --series-yellow: #c98500;
+  --series-magenta: #d55181;
+  --series-green: #008300;
+  --series-violet: #9085e9;
+  --series-red: #e66767;
+
+  --text-good: #0ca30c;
+  --text-critical: #e66767;
+}
+
+@theme inline {
+  --color-good: var(--text-good);
+  --color-critical: var(--text-critical);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
